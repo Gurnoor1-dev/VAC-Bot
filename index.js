@@ -2,6 +2,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const PDFDocument = require('pdfkit');
 
 const {
@@ -13,11 +14,6 @@ const {
     AttachmentBuilder,
     EmbedBuilder
 } = require('discord.js');
-
-
-// =====================
-// BASIC CONFIG
-// =====================
 
 const ALLOWED_ROLE_ID = "1471073279065329785";
 const DATA_FILE = path.join(__dirname, 'tickets.json');
@@ -31,9 +27,7 @@ const client = new Client({
 });
 
 
-// =====================
-// LOAD / SAVE JSON
-// =====================
+// ================= LOAD JSON =================
 
 let tickets = {};
 
@@ -50,9 +44,7 @@ function saveTickets() {
 }
 
 
-// =====================
-// UTIL FUNCTIONS
-// =====================
+// ================= UTIL =================
 
 function generateID(product) {
     const random = Math.random().toString(36).substring(2, 7);
@@ -60,51 +52,49 @@ function generateID(product) {
     return `${prefix}-${random}`;
 }
 
-async function generatePDF(data) {
-    return new Promise((resolve, reject) => {
 
-        const filePath = path.join(__dirname, `${data.id}.pdf`);
-        const doc = new PDFDocument({ size: 'A4', margin: 50 });
-        const stream = fs.createWriteStream(filePath);
+// Download PNG from URL
+function downloadImage(url, filepath) {
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(filepath);
+        https.get(url, response => {
+            response.pipe(file);
+            file.on('finish', () => {
+                file.close();
+                resolve();
+            });
+        }).on('error', err => {
+            fs.unlink(filepath, () => {});
+            reject(err);
+        });
+    });
+}
+
+
+// Convert PNG to PDF
+function convertToPDF(imagePath, pdfPath) {
+    return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ autoFirstPage: false });
+        const stream = fs.createWriteStream(pdfPath);
 
         doc.pipe(stream);
 
-        // Header Background
-        doc.rect(0, 0, doc.page.width, 100).fill('#111827');
+        const img = doc.openImage(imagePath);
 
-        // Header Text
-        doc.fillColor('#ffffff')
-            .fontSize(24)
-            .text("VACompany Order Document", 50, 40);
+        doc.addPage({
+            size: [img.width, img.height]
+        });
 
-        doc.moveDown(4);
-
-        // Body
-        doc.fillColor('#000000');
-        doc.fontSize(16).text(`Order ID: ${data.id}`);
-        doc.moveDown();
-
-        doc.fontSize(14).text(`Client Name: ${data.client_name}`);
-        doc.text(`Product: ${data.product}`);
-        doc.text(`Status: ${data.status}`);
-
-        doc.moveDown(2);
-
-        doc.fontSize(16).text("Client Requests:");
-        doc.moveDown();
-        doc.fontSize(12).text(data.requests, { width: 500 });
-
+        doc.image(imagePath, 0, 0);
         doc.end();
 
-        stream.on('finish', () => resolve(filePath));
+        stream.on('finish', resolve);
         stream.on('error', reject);
     });
 }
 
 
-// =====================
-// REGISTER COMMANDS
-// =====================
+// ================= REGISTER COMMANDS =================
 
 client.once('ready', async () => {
 
@@ -142,7 +132,7 @@ client.once('ready', async () => {
 
         new SlashCommandBuilder()
             .setName('completeorder')
-            .setDescription('Complete order & send document')
+            .setDescription('Complete order & send PDF')
             .addStringOption(o =>
                 o.setName('id')
                     .setDescription('Order ID')
@@ -150,6 +140,10 @@ client.once('ready', async () => {
             .addUserOption(o =>
                 o.setName('user')
                     .setDescription('Client Discord User')
+                    .setRequired(true))
+            .addStringOption(o =>
+                o.setName('png_link')
+                    .setDescription('Direct PNG link')
                     .setRequired(true)),
 
         new SlashCommandBuilder()
@@ -172,16 +166,14 @@ client.once('ready', async () => {
 });
 
 
-// =====================
-// COMMAND HANDLER
-// =====================
+// ================= COMMAND HANDLER =================
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     try {
 
-        // ================= ADD TICKET =================
+        // ADD TICKET
         if (interaction.commandName === 'addticket') {
 
             if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
@@ -205,7 +197,7 @@ client.on('interactionCreate', async interaction => {
             });
         }
 
-        // ================= COMPLETE ORDER =================
+        // COMPLETE ORDER
         if (interaction.commandName === 'completeorder') {
 
             if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
@@ -215,6 +207,7 @@ client.on('interactionCreate', async interaction => {
 
             const id = interaction.options.getString('id');
             const user = interaction.options.getUser('user');
+            const pngLink = interaction.options.getString('png_link');
 
             if (!tickets[id])
                 return interaction.editReply("❌ Order not found.");
@@ -222,21 +215,26 @@ client.on('interactionCreate', async interaction => {
             tickets[id].status = "Processed";
             saveTickets();
 
-            const pdfPath = await generatePDF(tickets[id]);
+            const imagePath = path.join(__dirname, `${id}.png`);
+            const pdfPath = path.join(__dirname, `${id}.pdf`);
+
+            await downloadImage(pngLink, imagePath);
+            await convertToPDF(imagePath, pdfPath);
+
             const attachment = new AttachmentBuilder(pdfPath);
 
             await user.send({
-                content: "🎉 Your order has been completed. Here is your document:",
+                content: "🎉 Your order has been completed. Here is your PDF:",
                 files: [attachment]
             });
 
-            await interaction.editReply("✅ Order completed and document sent.");
+            await interaction.editReply("✅ PDF generated and sent.");
 
-            if (fs.existsSync(pdfPath))
-                fs.unlinkSync(pdfPath);
+            if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+            if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
         }
 
-        // ================= STATUS =================
+        // STATUS
         if (interaction.commandName === 'status') {
 
             const id = interaction.options.getString('id');
@@ -257,35 +255,23 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setColor("Blue");
 
-            return interaction.reply({
-                embeds: [embed],
-                ephemeral: true
-            });
+            return interaction.reply({ embeds: [embed], ephemeral: true });
         }
 
     } catch (err) {
-        console.error("COMMAND ERROR:", err);
-
+        console.error(err);
         if (interaction.deferred)
-            return interaction.editReply("❌ An unexpected error occurred.");
+            interaction.editReply("❌ Error occurred.");
         else
-            return interaction.reply({ content: "❌ An unexpected error occurred.", ephemeral: true });
+            interaction.reply({ content: "❌ Error occurred.", ephemeral: true });
     }
 });
-
-
-// =====================
-// LOGIN
-// =====================
 
 client.login(process.env.TOKEN);
 
 
-// =====================
-// RAILWAY KEEP-ALIVE SERVER
-// =====================
-
+// Railway Keep Alive
 http.createServer((req, res) => {
     res.writeHead(200);
-    res.end('Bot is running');
+    res.end("Bot is running");
 }).listen(process.env.PORT || 3000);
