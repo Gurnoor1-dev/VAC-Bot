@@ -1,7 +1,8 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer-core');
+const PDFDocument = require('pdfkit');
+
 const {
     Client,
     GatewayIntentBits,
@@ -18,7 +19,6 @@ const client = new Client({
 
 const ALLOWED_ROLE_ID = "1471073279065329785";
 const DATA_FILE = path.join(__dirname, 'tickets.json');
-const TEMPLATE_FILE = path.join(__dirname, 'template.html');
 
 let tickets = {};
 if (fs.existsSync(DATA_FILE)) {
@@ -36,39 +36,48 @@ function generateID(product) {
 }
 
 async function generatePDF(data) {
-    try {
-        let html = fs.readFileSync(TEMPLATE_FILE, 'utf8');
+    return new Promise((resolve, reject) => {
 
-        html = html
-            .replace('{{CLIENT_NAME}}', data.client_name)
-            .replace('{{PRODUCT}}', data.product)
-            .replace('{{ORDER_ID}}', data.id)
-            .replace('{{REQUESTS}}', data.requests);
+        const filePath = path.join(__dirname, `${data.id}.pdf`);
+        const doc = new PDFDocument({ size: 'A4', margin: 50 });
+        const stream = fs.createWriteStream(filePath);
 
-        const browser = await puppeteer.launch({
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
-            headless: true
+        doc.pipe(stream);
+
+        // Header
+        doc
+            .rect(0, 0, doc.page.width, 100)
+            .fill('#111827');
+
+        doc
+            .fillColor('#ffffff')
+            .fontSize(24)
+            .text("VACompany Order Document", 50, 40);
+
+        doc.moveDown(4);
+
+        // Body
+        doc.fillColor('#000000');
+        doc.fontSize(16).text(`Order ID: ${data.id}`);
+        doc.moveDown();
+
+        doc.fontSize(14).text(`Client Name: ${data.client_name}`);
+        doc.text(`Product: ${data.product}`);
+        doc.text(`Status: ${data.status}`);
+
+        doc.moveDown(2);
+
+        doc.fontSize(16).text("Client Requests:");
+        doc.moveDown();
+        doc.fontSize(12).text(data.requests, {
+            width: 500
         });
 
-        const page = await browser.newPage();
-        await page.setContent(html, { waitUntil: 'networkidle0' });
+        doc.end();
 
-        const pdfPath = path.join(__dirname, `${data.id}.pdf`);
-
-        await page.pdf({
-            path: pdfPath,
-            format: 'A4',
-            printBackground: true
-        });
-
-        await browser.close();
-        return pdfPath;
-
-    } catch (err) {
-        console.error("PDF ERROR:", err);
-        return null;
-    }
+        stream.on('finish', () => resolve(filePath));
+        stream.on('error', reject);
+    });
 }
 
 client.once('ready', async () => {
@@ -177,10 +186,6 @@ client.on('interactionCreate', async interaction => {
             saveTickets();
 
             const pdfPath = await generatePDF(tickets[id]);
-
-            if (!pdfPath)
-                return interaction.editReply("PDF generation failed.");
-
             const attachment = new AttachmentBuilder(pdfPath);
 
             await user.send({
