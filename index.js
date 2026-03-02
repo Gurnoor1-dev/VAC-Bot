@@ -1,6 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const PDFDocument = require('pdfkit');
 
 const {
@@ -13,21 +14,45 @@ const {
     EmbedBuilder
 } = require('discord.js');
 
-const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages]
-});
+
+// =====================
+// BASIC CONFIG
+// =====================
 
 const ALLOWED_ROLE_ID = "1471073279065329785";
 const DATA_FILE = path.join(__dirname, 'tickets.json');
 
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages
+    ]
+});
+
+
+// =====================
+// LOAD / SAVE JSON
+// =====================
+
 let tickets = {};
+
 if (fs.existsSync(DATA_FILE)) {
-    tickets = JSON.parse(fs.readFileSync(DATA_FILE));
+    try {
+        tickets = JSON.parse(fs.readFileSync(DATA_FILE));
+    } catch {
+        tickets = {};
+    }
 }
 
 function saveTickets() {
     fs.writeFileSync(DATA_FILE, JSON.stringify(tickets, null, 2));
 }
+
+
+// =====================
+// UTIL FUNCTIONS
+// =====================
 
 function generateID(product) {
     const random = Math.random().toString(36).substring(2, 7);
@@ -44,13 +69,11 @@ async function generatePDF(data) {
 
         doc.pipe(stream);
 
-        // Header
-        doc
-            .rect(0, 0, doc.page.width, 100)
-            .fill('#111827');
+        // Header Background
+        doc.rect(0, 0, doc.page.width, 100).fill('#111827');
 
-        doc
-            .fillColor('#ffffff')
+        // Header Text
+        doc.fillColor('#ffffff')
             .fontSize(24)
             .text("VACompany Order Document", 50, 40);
 
@@ -69,9 +92,7 @@ async function generatePDF(data) {
 
         doc.fontSize(16).text("Client Requests:");
         doc.moveDown();
-        doc.fontSize(12).text(data.requests, {
-            width: 500
-        });
+        doc.fontSize(12).text(data.requests, { width: 500 });
 
         doc.end();
 
@@ -79,6 +100,11 @@ async function generatePDF(data) {
         stream.on('error', reject);
     });
 }
+
+
+// =====================
+// REGISTER COMMANDS
+// =====================
 
 client.once('ready', async () => {
 
@@ -136,23 +162,30 @@ client.once('ready', async () => {
     ];
 
     const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
     await rest.put(
         Routes.applicationCommands(process.env.CLIENT_ID),
         { body: commands }
     );
 
-    console.log("Bot Ready");
+    console.log("✅ Bot Ready");
 });
+
+
+// =====================
+// COMMAND HANDLER
+// =====================
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     try {
 
+        // ================= ADD TICKET =================
         if (interaction.commandName === 'addticket') {
 
             if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
-                return interaction.reply({ content: "No permission.", ephemeral: true });
+                return interaction.reply({ content: "❌ No permission.", ephemeral: true });
 
             const id = generateID(interaction.options.getString('product'));
 
@@ -166,13 +199,17 @@ client.on('interactionCreate', async interaction => {
 
             saveTickets();
 
-            return interaction.reply({ content: `Ticket created: ${id}`, ephemeral: true });
+            return interaction.reply({
+                content: `✅ Ticket created: **${id}**`,
+                ephemeral: true
+            });
         }
 
+        // ================= COMPLETE ORDER =================
         if (interaction.commandName === 'completeorder') {
 
             if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
-                return interaction.reply({ content: "No permission.", ephemeral: true });
+                return interaction.reply({ content: "❌ No permission.", ephemeral: true });
 
             await interaction.deferReply({ ephemeral: true });
 
@@ -180,7 +217,7 @@ client.on('interactionCreate', async interaction => {
             const user = interaction.options.getUser('user');
 
             if (!tickets[id])
-                return interaction.editReply("Order not found.");
+                return interaction.editReply("❌ Order not found.");
 
             tickets[id].status = "Processed";
             saveTickets();
@@ -189,22 +226,26 @@ client.on('interactionCreate', async interaction => {
             const attachment = new AttachmentBuilder(pdfPath);
 
             await user.send({
-                content: "Your order has been completed. Here is your document:",
+                content: "🎉 Your order has been completed. Here is your document:",
                 files: [attachment]
             });
 
-            await interaction.editReply("Order completed and document sent.");
+            await interaction.editReply("✅ Order completed and document sent.");
 
             if (fs.existsSync(pdfPath))
                 fs.unlinkSync(pdfPath);
         }
 
+        // ================= STATUS =================
         if (interaction.commandName === 'status') {
 
             const id = interaction.options.getString('id');
 
             if (!tickets[id])
-                return interaction.reply({ content: "Order not found.", ephemeral: true });
+                return interaction.reply({
+                    content: "❌ Product not found, double-check the Order-ID or let an ADMIN know.",
+                    ephemeral: true
+                });
 
             const embed = new EmbedBuilder()
                 .setTitle("🗃️ Order Status")
@@ -216,17 +257,35 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setColor("Blue");
 
-            return interaction.reply({ embeds: [embed], ephemeral: true });
+            return interaction.reply({
+                embeds: [embed],
+                ephemeral: true
+            });
         }
 
     } catch (err) {
         console.error("COMMAND ERROR:", err);
 
         if (interaction.deferred)
-            return interaction.editReply("An unexpected error occurred.");
+            return interaction.editReply("❌ An unexpected error occurred.");
         else
-            return interaction.reply({ content: "An unexpected error occurred.", ephemeral: true });
+            return interaction.reply({ content: "❌ An unexpected error occurred.", ephemeral: true });
     }
 });
 
+
+// =====================
+// LOGIN
+// =====================
+
 client.login(process.env.TOKEN);
+
+
+// =====================
+// RAILWAY KEEP-ALIVE SERVER
+// =====================
+
+http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot is running');
+}).listen(process.env.PORT || 3000);
