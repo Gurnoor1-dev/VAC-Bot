@@ -8,7 +8,8 @@ const {
     SlashCommandBuilder,
     REST,
     Routes,
-    AttachmentBuilder
+    AttachmentBuilder,
+    EmbedBuilder
 } = require('discord.js');
 
 const client = new Client({
@@ -35,33 +36,39 @@ function generateID(product) {
 }
 
 async function generatePDF(data) {
-    let html = fs.readFileSync(TEMPLATE_FILE, 'utf8');
+    try {
+        let html = fs.readFileSync(TEMPLATE_FILE, 'utf8');
 
-    html = html
-        .replace('{{CLIENT_NAME}}', data.client_name)
-        .replace('{{PRODUCT}}', data.product)
-        .replace('{{ORDER_ID}}', data.id)
-        .replace('{{REQUESTS}}', data.requests);
+        html = html
+            .replace('{{CLIENT_NAME}}', data.client_name)
+            .replace('{{PRODUCT}}', data.product)
+            .replace('{{ORDER_ID}}', data.id)
+            .replace('{{REQUESTS}}', data.requests);
 
-    const browser = await puppeteer.launch({
-  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-  args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  headless: 'new'
-});
+        const browser = await puppeteer.launch({
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            headless: true
+        });
 
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+        const page = await browser.newPage();
+        await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    const pdfPath = `./${data.id}.pdf`;
+        const pdfPath = path.join(__dirname, `${data.id}.pdf`);
 
-    await page.pdf({
-        path: pdfPath,
-        format: 'A4',
-        printBackground: true
-    });
+        await page.pdf({
+            path: pdfPath,
+            format: 'A4',
+            printBackground: true
+        });
 
-    await browser.close();
-    return pdfPath;
+        await browser.close();
+        return pdfPath;
+
+    } catch (err) {
+        console.error("PDF ERROR:", err);
+        return null;
+    }
 }
 
 client.once('ready', async () => {
@@ -131,70 +138,89 @@ client.once('ready', async () => {
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
-    if (interaction.commandName === 'addticket') {
+    try {
 
-        if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
-            return interaction.reply({ content: "No permission.", ephemeral: true });
+        if (interaction.commandName === 'addticket') {
 
-        const id = generateID(interaction.options.getString('product'));
+            if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
+                return interaction.reply({ content: "No permission.", ephemeral: true });
 
-        tickets[id] = {
-            id,
-            client_name: interaction.options.getString('client'),
-            product: interaction.options.getString('product'),
-            status: interaction.options.getString('status'),
-            requests: interaction.options.getString('requests')
-        };
+            const id = generateID(interaction.options.getString('product'));
 
-        saveTickets();
+            tickets[id] = {
+                id,
+                client_name: interaction.options.getString('client'),
+                product: interaction.options.getString('product'),
+                status: interaction.options.getString('status'),
+                requests: interaction.options.getString('requests')
+            };
 
-        return interaction.reply({ content: `Ticket created: ${id}`, ephemeral: true });
-    }
+            saveTickets();
 
-    if (interaction.commandName === 'completeorder') {
+            return interaction.reply({ content: `Ticket created: ${id}`, ephemeral: true });
+        }
 
-        if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
-            return interaction.reply({ content: "No permission.", ephemeral: true });
+        if (interaction.commandName === 'completeorder') {
 
-        await interaction.deferReply({ ephemeral: true });
+            if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
+                return interaction.reply({ content: "No permission.", ephemeral: true });
 
-        const id = interaction.options.getString('id');
-        const user = interaction.options.getUser('user');
+            await interaction.deferReply({ ephemeral: true });
 
-        if (!tickets[id])
-            return interaction.editReply("Order not found.");
+            const id = interaction.options.getString('id');
+            const user = interaction.options.getUser('user');
 
-        tickets[id].status = "Processed";
-        saveTickets();
+            if (!tickets[id])
+                return interaction.editReply("Order not found.");
 
-        const pdfPath = await generatePDF(tickets[id]);
-        const attachment = new AttachmentBuilder(pdfPath);
+            tickets[id].status = "Processed";
+            saveTickets();
 
-        try {
+            const pdfPath = await generatePDF(tickets[id]);
+
+            if (!pdfPath)
+                return interaction.editReply("PDF generation failed.");
+
+            const attachment = new AttachmentBuilder(pdfPath);
+
             await user.send({
                 content: "Your order has been completed. Here is your document:",
                 files: [attachment]
             });
 
             await interaction.editReply("Order completed and document sent.");
-        } catch {
-            await interaction.editReply("Could not DM the user.");
+
+            if (fs.existsSync(pdfPath))
+                fs.unlinkSync(pdfPath);
         }
 
-        fs.unlinkSync(pdfPath);
-    }
+        if (interaction.commandName === 'status') {
 
-    if (interaction.commandName === 'status') {
+            const id = interaction.options.getString('id');
 
-        const id = interaction.options.getString('id');
+            if (!tickets[id])
+                return interaction.reply({ content: "Order not found.", ephemeral: true });
 
-        if (!tickets[id])
-            return interaction.reply({ content: "Order not found.", ephemeral: true });
+            const embed = new EmbedBuilder()
+                .setTitle("🗃️ Order Status")
+                .addFields(
+                    { name: "Order ID", value: tickets[id].id },
+                    { name: "Name", value: tickets[id].client_name },
+                    { name: "Product", value: tickets[id].product },
+                    { name: "Status", value: tickets[id].status }
+                )
+                .setColor("Blue");
 
-        return interaction.reply({
-            content: `Status: ${tickets[id].status}`,
-            ephemeral: true
-        });
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+
+    } catch (err) {
+        console.error("COMMAND ERROR:", err);
+
+        if (interaction.deferred)
+            return interaction.editReply("An unexpected error occurred.");
+        else
+            return interaction.reply({ content: "An unexpected error occurred.", ephemeral: true });
     }
 });
 
