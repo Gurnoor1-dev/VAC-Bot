@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
 const {
     Client,
     GatewayIntentBits,
@@ -44,8 +44,10 @@ async function generatePDF(data) {
         .replace('{{REQUESTS}}', data.requests);
 
     const browser = await puppeteer.launch({
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+  executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+  args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  headless: 'new'
+});
 
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
