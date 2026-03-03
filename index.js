@@ -101,34 +101,38 @@ client.once('ready', async () => {
     const commands = [
 
         new SlashCommandBuilder()
-            .setName('addticket')
-            .setDescription('Add a new ticket')
-            .addStringOption(o =>
-                o.setName('client')
-                    .setDescription('Client Name')
-                    .setRequired(true))
-            .addStringOption(o =>
-                o.setName('product')
-                    .setDescription('Product')
-                    .setRequired(true)
-                    .addChoices(
-                        { name: 'VACompanyPolaris™', value: 'VACompanyPolaris™' },
-                        { name: 'VACompany Tracker™', value: 'VACompany Tracker™' }
-                    ))
-            .addStringOption(o =>
-                o.setName('status')
-                    .setDescription('Status')
-                    .setRequired(true)
-                    .addChoices(
-                        { name: 'In Production Phase', value: 'In Production Phase' },
-                        { name: 'In Test Phase', value: 'In Test Phase' },
-                        { name: 'Handed off to VA for testing', value: 'Handed off to VA for testing' },
-                        { name: 'Test Completed', value: 'Test Completed' }
-                    ))
-            .addStringOption(o =>
-                o.setName('requests')
-                    .setDescription('Client Requests')
-                    .setRequired(true)),
+    .setName('addticket')
+    .setDescription('Add a new ticket')
+    .addStringOption(o =>
+        o.setName('client')
+            .setDescription('Client Name')
+            .setRequired(true))
+    .addStringOption(o =>
+        o.setName('product')
+            .setDescription('Product')
+            .setRequired(true)
+            .addChoices(
+                { name: 'VACompanyPolaris™', value: 'VACompanyPolaris™' },
+                { name: 'VACompany Tracker™', value: 'VACompany Tracker™' }
+            ))
+    .addStringOption(o =>
+        o.setName('status')
+            .setDescription('Status')
+            .setRequired(true)
+            .addChoices(
+                { name: 'In Production Phase', value: 'In Production Phase' },
+                { name: 'In Test Phase', value: 'In Test Phase' },
+                { name: 'Handed off to VA for testing', value: 'Handed off to VA for testing' },
+                { name: 'Test Completed', value: 'Test Completed' }
+            ))
+    .addStringOption(o =>
+        o.setName('requests')
+            .setDescription('Client Requests')
+            .setRequired(true))
+    .addStringOption(o =>
+        o.setName('ticket_id')
+            .setDescription('Custom Ticket ID (optional)')
+            .setRequired(false))
 
         new SlashCommandBuilder()
             .setName('completeorder')
@@ -179,7 +183,21 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.member.roles.cache.has(ALLOWED_ROLE_ID))
                 return interaction.reply({ content: "❌ No permission.", ephemeral: true });
 
-            const id = generateID(interaction.options.getString('product'));
+            const customID = interaction.options.getString('ticket_id');
+let id;
+
+if (customID && customID.trim() !== "") {
+    id = customID.toLowerCase();
+
+    if (tickets[id]) {
+        return interaction.reply({
+            content: "❌ This Ticket-ID already exists.",
+            ephemeral: true
+        });
+    }
+} else {
+    id = generateID(interaction.options.getString('product'));
+}
 
             tickets[id] = {
                 id,
